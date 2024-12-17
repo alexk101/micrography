@@ -62,6 +62,15 @@ def parse_files():
     return compositions, uc_params, imgdata
 
 
+def remap_labels(data):
+    """Remap labels to start from 0"""
+    unique_labels = np.unique(data)
+    new_labels = np.arange(len(unique_labels))
+    for i, label in enumerate(unique_labels):
+        data[data == label] = new_labels[i]
+    return data
+
+
 def process_data(compositions, uc_params, imgdata):
     SBFO_data = []     #this will be the output list of dictionaries for each dataset
 
