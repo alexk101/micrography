@@ -3,9 +3,9 @@
 Micrography is a python package with the goal of incorporating graph data for the analysis of electron microscope images. 
 
 ## Initial Goals
-- [] efficiently extract graphs from electron microscope images
-- [] use GNNs to predict defects in materials
-- [] use GNNs to guide the electron microscope to areas of interest
+- [ ] efficiently extract graphs from electron microscope images
+- [ ] use GNNs to predict defects in materials
+- [ ] use GNNs to guide the electron microscope to areas of interest
 
 ## Installation
 
