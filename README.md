@@ -9,7 +9,7 @@ Micrography is a python package with the goal of incorporating graph data for th
 
 ## Installation
 
-To run this code, we recommend using a some kind of virtual environment. We support conda, uv, and pip. It is only necessary to use one of these methods, so choose the one that you are most comfortable with.
+To run this code, we recommend using a virtual environment. We support conda, uv, and pip. It is only necessary to use one of these methods, so choose the one that you are most comfortable with.
 
 ### Conda
 
