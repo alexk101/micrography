@@ -1,3 +1,8 @@
 data
 sample_imgs
 *__pycache__*
+.venv
+
+# Dont use lockfile since some people 
+# might use different versions of the packages (cpu vs gpu)
+uv.lock

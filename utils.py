@@ -1,7 +1,17 @@
 from pathlib import Path
 import h5py
-import wget
 import numpy as np
+from tqdm import tqdm
+import requests
+
+def download(url, fname):
+    r = requests.get(url, stream=True)
+    with open(fname, 'wb') as f:
+        total_length = int(r.headers.get('content-length'))
+        for chunk in tqdm(r.iter_content(chunk_size=1024), total=total_length/1024, unit='KB'): 
+            if chunk:
+                f.write(chunk)
+                f.flush()
 
 
 def download_data():
@@ -21,8 +31,8 @@ def download_data():
 
     for model_file in model_files:
         if not (output_dir / model_file).exists():
-            print(output_dir / model_file)
-            wget.download("https://zenodo.org/record/4555979/files/"+model_file+"?download=1", out=str(output_dir / model_file))
+            print(f'Downloading: {output_dir / model_file}')
+            download("https://zenodo.org/record/4555979/files/"+model_file+"?download=1", str(output_dir / model_file))
 
 
 def map2grid(inab, inVal):
