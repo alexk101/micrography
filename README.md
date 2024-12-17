@@ -9,7 +9,7 @@ Micrography is a python package with the goal of incorporating graph data for th
 
 ## Installation
 
-To run this code, we recommend using a some kind of virtual environment. 
+To run this code, we recommend using a some kind of virtual environment. We support conda, uv, and pip. It is only necessary to use one of these methods, so choose the one that you are most comfortable with.
 
 ### Conda
 
@@ -18,11 +18,13 @@ We recommend using conda with the mamba solver, as it is much faster than the de
 **Nvidia GPU**
 ```bash
 mamba env create -f cuda_env.yml
+mamba activate micrography
 ```
 
 **CPU**
 ```bash
 mamba env create -f cpu_env.yml
+mamba activate micrography
 ```
 
 ### UV
@@ -49,7 +51,7 @@ pip install .
 ```
 ## Data
 
-Sample data for this repo is taken [STEM images and associated parameters for Sm-doped BFO](https://doi.org/10.5281/zenodo.4555978).
+Sample data for this repo is taken from [STEM images and associated parameters for Sm-doped BFO](https://doi.org/10.5281/zenodo.4555978).
 
 ## Usage
 
