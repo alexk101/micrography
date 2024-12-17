@@ -40,14 +40,14 @@ uv venv
 If you prefer to use `pip`, you can install all dependencies into your current environment with the following command:
 
 ```bash
-pip install requirements.txt
+pip install -r requirements.txt
 ```
 
 However, we recommend using a virtual environment to avoid conflicts with other packages.
 ```bash
 python -m venv venv
 source venv/bin/activate
-pip install requirements.txt
+pip install -r requirements.txt
 ```
 ## Data
 
