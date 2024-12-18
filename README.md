@@ -56,3 +56,7 @@ Sample data for this repo is taken from [STEM images and associated parameters f
 ## Usage
 
 All examples in micrography are written in the form of `marimo` notebooks. These are reproducible and easily version controlled, unlike standard jupyter notebooks. They can additionally be run as standalone python scripts, making them much more ergonomic for development. For more information on `marimo`, see the [documentation](https://marimo.io/).
+
+**NOTE**
+This is tentative and will be updated as the project progresses. We are doing most of the current work in the `project.py` file, as well as standardized functions being written in the `pipeline.py` and `utils.py` files. We will move the final work to marimo notebooks for reproducibility and ease of use later.
+

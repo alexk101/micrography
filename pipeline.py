@@ -7,9 +7,9 @@ from sklearn.cluster import DBSCAN
 from pathlib import Path
 import matplotlib.pyplot as plt
 from PIL import Image
-from utils import remap_labels
 from typing import Tuple
 import numba
+import polars as pl
 
 def plot_and_save(data: np.ndarray, target: Path, name: str, ax: plt.Axes, color: bool = False) -> None:
     """Plots the data and saves the full resolution image to the target directory.
@@ -93,9 +93,93 @@ def find_sizes(labels: np.ndarray, cutoff: int= 200) -> Tuple[np.ndarray, dict, 
     return sizes, class_sizes, num_greater
 
 
-def prune_regions(class_sizes: int, labels: np.ndarray) -> np.ndarray:
+@numba.njit(fastmath=True, parallel=True)
+def prune_regions(class_sizes: dict, labels: np.ndarray) -> np.ndarray:
+    """Prune regions based on class sizes and remap labels to be contiguous.
+
+    Args:
+        class_sizes (dict): Dictionary of class sizes.
+        labels (np.ndarray): Labeled image.
+
+    Returns:
+        np.ndarray: Pruned and remapped labeled image.
+    """
     print("Pruning regions")
     pruned_labels = labels.copy()
-    pruned_labels[~np.isin(labels, list(class_sizes.keys()))] = 0
-    # remap so labels are contiguous
-    pruned_labels = remap_labels(pruned_labels)
+    keys = np.array(list(class_sizes.keys()))
+
+    for i in numba.prange(pruned_labels.shape[0]):
+        for j in range(pruned_labels.shape[1]):
+            if pruned_labels[i, j] not in keys:
+                pruned_labels[i, j] = 0
+
+    # Remap labels to be contiguous
+    unique_labels = np.unique(pruned_labels)
+    new_labels = np.arange(len(unique_labels))
+    label_map = {old: new for old, new in zip(unique_labels, new_labels)}
+
+    for i in numba.prange(pruned_labels.shape[0]):
+        for j in range(pruned_labels.shape[1]):
+            pruned_labels[i, j] = label_map[pruned_labels[i, j]]
+
+    return pruned_labels
+
+
+def numba_class_stats(data):
+    @numba.njit(fastmath=True, parallel=True)
+    def get_stats(data):
+        all_outputs = np.zeros((len(np.unique(data)) - 1, 6))
+        classes = np.unique(data)[1:]
+        for ind in numba.prange(classes.size):
+            c = classes[ind]
+            x, y = np.where(c == data)
+            all_outputs[ind] = [c, x.size, np.median(x), np.median(y), np.std(x), np.std(y)]
+        return all_outputs
+
+    output_np = get_stats(data)
+    cols_dtypes = {
+        'class': pl.UInt32, 
+        'size': pl.UInt32, 
+        'median_x': pl.UInt32, 
+        'median_y': pl.UInt32, 
+        'std_x': pl.Float32, 
+        'std_y': pl.Float32
+    }
+    output = pl.DataFrame(output_np, schema=cols_dtypes)    
+    return output
+
+
+@numba.njit(fastmath=True, parallel=True)
+def reassign_classes(org_img: np.ndarray, org_classes: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    """Reassign newly learned classes to the original image.
+
+    Args:
+        org_img (np.ndarray): A 2D numpy array representing the original image.
+        org_classes (np.ndarray): A numpy array representing the original classes.
+        y_pred (np.ndarray): A numpy array representing the new classes.
+
+    Returns:
+        np.ndarray: A 2D numpy array of the same shape as `org_img` with the new classes.
+    """
+    class_map = dict(zip(org_classes,y_pred))
+    class_map[0] = 0
+    output = np.zeros_like(org_img)
+
+    n_row, n_col = org_img.shape
+    for row_i in numba.prange(n_row):
+        for col_i in numba.prange(n_col):
+            output[row_i][col_i] = class_map[org_img[row_i][col_i]]
+    return output
+
+### GRAPH FUNCTIONS
+
+@numba.njit(fastmath=True, parallel=True)
+def get_nearest_neighbors(centroids: np.ndarray):
+    dists = np.zeros((centroids.shape[0], 4))
+    indices = np.zeros((centroids.shape[0], 4))
+    for i in numba.prange(centroids.shape[0]):
+        dist = np.sqrt(np.sum((centroids - centroids[i]) ** 2, axis=1))
+        sorted_indices = np.argsort(dist)[1:5]  # Skip the first one because it's the point itself
+        dists[i] = dist[sorted_indices]
+        indices[i] = sorted_indices
+    return dists, indices.astype(np.uint32)
