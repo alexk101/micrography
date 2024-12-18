@@ -2,10 +2,22 @@
 
 Micrography is a python package with the goal of incorporating graph data for the analysis of electron microscope images. 
 
+## Motivation
+
+We want to be able to actively control an electron microscope to analyze regions of a material in the most efficient way possible. In particular, we want to direct the microscope to focus on regions which are "interesting". We can call these areas outlier or defects. 
+
+Using open source STEM images, we can extract molecule locations. We label each pixel defining each region. We then find the centroid of each region, as well as some other features like stdv in the x and y dimensions. We can construct a graph from this by finding the 4 nearest neighbors to each molecule and connecting them with edge, though, this is a naive assumption for now, as not all molecules may have 4 neighbors due to defects. However, we operate on this assumption for now. Using this information from nearest neighbors and the image data, we can learn more meaningful relationships about materials.
+
 ## Initial Goals
-- [ ] efficiently extract graphs from electron microscope images
-- [ ] use GNNs to predict defects in materials
-- [ ] use GNNs to guide the electron microscope to areas of interest
+- [X] Efficiently extract graphs from electron microscope images
+- [X] Compare interpretability to traditional Autoencoder
+- [X] Explore material graph structure features
+- [X] Use GNNs to predict defects in materials
+- [ ] Use GNNs to guide an electron microscope to areas of interest
+
+## Current State
+
+We were able to complete quite a lot of work in a short amount of time, but were not able to fully reach our goal of using a GNN to predict unseen regions to guide a microscope to "interesting" regions. We hope to further develop this code to do so in the future, as well as explore more deeply how graphs can help us learn about and guide material imaging and discovery.
 
 ## Installation
 
