@@ -10,6 +10,7 @@ from PIL import Image
 from typing import Tuple
 import numba
 import polars as pl
+from scipy.interpolate import Rbf
 
 def plot_and_save(data: np.ndarray, target: Path, name: str, ax: plt.Axes, color: bool = False) -> None:
     """Plots the data and saves the full resolution image to the target directory.
@@ -138,10 +139,10 @@ def numba_class_stats(data):
 
     output_np = get_stats(data)
     cols_dtypes = {
-        'class': pl.UInt32, 
-        'size': pl.UInt32, 
-        'median_x': pl.UInt32, 
-        'median_y': pl.UInt32, 
+        'class': pl.Int32, 
+        'size': pl.Int32, 
+        'median_x': pl.Int32, 
+        'median_y': pl.Int32, 
         'std_x': pl.Float32, 
         'std_y': pl.Float32
     }
@@ -183,3 +184,47 @@ def get_nearest_neighbors(centroids: np.ndarray):
         dists[i] = dist[sorted_indices]
         indices[i] = sorted_indices
     return dists, indices.astype(np.uint32)
+
+
+def interpolate_and_plot(df, x_col, y_col, value_col, ax, grid_size=4000, resolution=500, rbf_function='multiquadric'):
+    """
+    Interpolates data points in a 2D space using Radial Basis Function (RBF) and plots the interpolated image.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame containing the input data.
+        x_col (str): Name of the column for x-coordinates.
+        y_col (str): Name of the column for y-coordinates.
+        value_col (str): Name of the column for the continuous values to interpolate.
+        grid_size (int): Maximum size of the space (assumes square grid). Default is 4000.
+        resolution (int): Number of grid points per axis (lower for faster computation). Default is 500.
+        rbf_function (str): RBF function to use. Options: 'multiquadric', 'linear', 'cubic', etc.
+
+    Returns:
+        np.ndarray: Interpolated grid of values.
+    """
+    # Extract columns from DataFrame
+    x = df[x_col].values
+    y = df[y_col].values
+    values = df[value_col].values
+
+    # Create a grid for interpolation
+    grid_x, grid_y = np.meshgrid(
+        np.linspace(0, grid_size, resolution), 
+        np.linspace(0, grid_size, resolution)
+    )
+
+    # RBF Interpolation
+    rbf = Rbf(x, y, values, function=rbf_function)
+    interpolated_values = rbf(grid_x, grid_y)
+
+    # Plot the interpolated image
+    ax.imshow(
+        interpolated_values, 
+        extent=(0, grid_size, 0, grid_size), 
+        origin='lower', 
+        cmap='viridis', 
+        alpha=0.85
+    )
+    ax.scatter(x, y, c=values, cmap='viridis', s=20, edgecolor='k', label='Input Points')
+    ax.title(f"RBF Interpolation: {value_col}")
+    ax.set_axis_off()

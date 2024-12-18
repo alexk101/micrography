@@ -21,5 +21,9 @@ dependencies = [
     "pillow",
     "polars",
     "pyarrow",
-    "torch_geometric"
+    "torch_geometric",
+    "datashader",
+    "colorcet",
+    "holoviews",
+    "scipy"
 ]

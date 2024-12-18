@@ -21,6 +21,10 @@ dependencies:
   - torchaudio==2.4.1
   - torchvision==0.19.1
   - tqdm
+  - datashader
+  - colorcet
+  - holoviews
+  - scipy
   - pip:
     - marimo==0.10.2
 
