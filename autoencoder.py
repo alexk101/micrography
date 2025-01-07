@@ -4,7 +4,11 @@ import torch.nn as nn
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
+import matplotlib as mpl
+from PIL import Image
+from pathlib import Path
 import numpy as np
+from pipeline import find_sizes, prune_regions
 
 class Autoencoder(nn.Module):
     def __init__(self, num_classes, latent_dim=64):
@@ -168,3 +172,68 @@ def visualize_latent_space(model: nn.Module, device, latent_dim, grid_size=10, l
     fig.suptitle("Decoded Images from Latent Space Grid", fontsize=16)
     fig.subplots_adjust(wspace=0, hspace=0)
     return fig
+
+
+def segment_image_vae(model, image, y_pred, device, sample, target: Path):
+    model.eval()
+    with torch.no_grad():
+        # Process the full image
+        full_image = torch.from_numpy(image).float().unsqueeze(0).unsqueeze(0).to(device)
+        
+        # If image is too large, process in patches
+        patch_size = 32  # Match the window size used during training
+        stride = 16      # Match the stride used during training
+        height, width = full_image.shape[2:]
+        segmented_image = torch.zeros_like(full_image)
+        
+        for row_start in range(0, height - patch_size + 1, stride):
+            for col_start in range(0, width - patch_size + 1, stride):
+                # Extract patch
+                patch = full_image[:, :, row_start:row_start+patch_size, col_start:col_start+patch_size]
+                
+                # Flatten the patch to match training dimensions
+                batch_size = patch.size(0)
+                patch_flat = patch.reshape(batch_size, patch_size * patch_size)  # Flatten to (batch_size, 1024)
+                
+                # Process patch
+                try:
+                    output = model(patch_flat)
+                    # If output is logits (num_classes, H, W), get predicted class
+                    if output.dim() == 4:  # Shape: (batch_size, num_classes, H, W)
+                        output = torch.argmax(output, dim=1, keepdim=True)  # Get class predictions
+                    elif output.dim() == 2:  # Shape: (batch_size, patch_size*patch_size)
+                        output = output.reshape(batch_size, 1, patch_size, patch_size)
+                except RuntimeError as e:
+                    print(f"Error processing patch at ({row_start}, {col_start}): {e}")
+                    continue
+                    
+                # Place processed patch back
+                segmented_image[:, :, row_start:row_start+patch_size, col_start:col_start+patch_size] = output
+        
+        # Convert to numpy and visualize
+        segmented = segmented_image.cpu().squeeze().numpy().astype(np.uint8)
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        axes[0].imshow(image, cmap='gray')
+        axes[0].set_title('Original Image')
+        axes[0].axis('off')
+        
+        axes[1].imshow(segmented, cmap='nipy_spectral')
+        axes[1].set_title('VAE Image')
+        axes[1].axis('off')
+        
+        axes[2].imshow(y_pred, cmap='nipy_spectral')
+        axes[2].set_title('GMM Labels')
+        axes[2].axis('off')
+
+        plt.show()
+
+        # Save the segmented image
+        cm = mpl.cm.nipy_spectral(np.linspace(0, 1, len(np.unique(segmented))))
+        colored_new_labels = np.array([cm[label] for label in segmented])
+        colored_new_labels = (colored_new_labels * 255).astype(np.uint8)  # Convert to uint8
+
+        img = Image.fromarray(colored_new_labels)
+        img.save(target/f"vae_classes.png")
+        return segmented
