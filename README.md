@@ -2,11 +2,48 @@
 
 Micrography is a python package with the goal of incorporating graph data for the analysis of electron microscope images. 
 
-## Motivation
+## Abstract
 
-We want to be able to actively control an electron microscope to analyze regions of a material in the most efficient way possible. In particular, we want to direct the microscope to focus on regions which are "interesting". We can call these areas outlier or defects. 
+Micrography introduces a novel graph-based framework for analyzing electron microscope images of materials, addressing fundamental limitations of traditional pixel-based approaches. While conventional methods like convolutional neural networks and autoencoders treat images as pixel arrays, our approach reconstructs the physical arrangement of molecules as graphs, where nodes represent individual molecules with their spatial and morphological features, and edges capture their nearest-neighbor relationships. This transformation preserves critical structural information that is often lost in pixel-space transformations. By applying graph neural networks to these molecular arrangements, we can detect subtle structural anomalies, characterize material properties, and identify defects with significantly improved interpretability. Our comparative analysis demonstrates that graph-based representations capture material properties that remain hidden to traditional methods, particularly in regions with structural irregularities. The framework lays groundwork for intelligent, guided microscopy that can autonomously direct imaging resources toward regions of scientific interest, fundamentally changing how electron microscopy is utilized in materials science research.
 
-Using open source STEM images, we can extract molecule locations. We label each pixel defining each region. We then find the centroid of each region, as well as some other features like stdv in the x and y dimensions. We can construct a graph from this by finding the 4 nearest neighbors to each molecule and connecting them with edge, though, this is a naive assumption for now, as not all molecules may have 4 neighbors due to defects. However, we operate on this assumption for now. Using this information from nearest neighbors and the image data, we can learn more meaningful relationships about materials.
+## Methodology
+
+Our methodology combines image analysis with graph theory to create a more powerful and interpretable framework:
+
+1. **Image Preprocessing and Molecular Identification:**
+   - Raw STEM images undergo binarization, erosion, and dilation to isolate distinct molecular regions
+   - Connected component analysis labels individual molecules
+   - Size-based filtering removes artifacts and noise
+   - Statistical features (centroid coordinates, spatial distribution, size) are extracted for each molecule
+
+2. **Comparative Segmentation Approaches:**
+   - Gaussian Mixture Models provide initial classification of molecular types
+   - A Variational Autoencoder enhances segmentation, particularly in boundary regions
+   - Statistical analysis of both approaches validates molecular classifications
+
+3. **Graph Construction and Topological Analysis:**
+   - Molecules become graph nodes with their extracted features as node attributes
+   - K-nearest neighbor connections (K=4) establish edges between molecules, capturing physical proximity
+   - Edge weights reflect the Euclidean distances between molecular centroids
+   - Nearest neighbor distance distributions reveal material lattice properties and structural patterns
+
+4. **Graph Neural Network Enhancement:**
+   - A Graph Autoencoder learns embeddings that preserve both molecular features and their spatial relationships
+   - The embedding space enables identification of structural motifs and anomalies not visible in pixel space
+   - Unsupervised clustering in the embedding space reveals regions with similar characteristics
+   - Graph visualization techniques provide intuitive interpretation of material properties
+
+5. **Structural Insights Through Graph Analysis:**
+   - Unusual nearest-neighbor distances highlight potential defect regions
+   - Deviations in graph structure identify areas of material strain or lattice distortion
+   - Neighborhood feature distributions reveal local material composition variations
+   - Spatial correlation of graph features provides insights into long-range order and disorder
+
+This graph-centric approach significantly augments traditional methods by explicitly preserving the spatial relationships between molecules, enabling multi-scale analysis from individual molecules to global structure, and providing a more physically interpretable representation that directly reflects the material's actual structure rather than pixel-based abstractions. The resulting framework not only improves defect detection but creates the foundation for guided microscopy where regions with unusual graph properties can be automatically targeted for more detailed examination.
+
+| **Preprocessing** <br> <img src="images/preprocessing.png" width="350"/> | **Variational Autoencoder (VAE) Latent Space** <br> <img src="images/vae.png" width="350"/> |
+|:------------------------------------------------------------------------:|:------------------------------------------------------------------------------------------:|
+| **Defect Detection** <br> <img src="images/defects.png" width="350"/> | **Graph Embedding** <br> <img src="images/graph_embed.png" width="350"/> |
 
 ## Initial Goals
 - [X] Efficiently extract graphs from electron microscope images
