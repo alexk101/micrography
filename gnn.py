@@ -30,6 +30,7 @@ class GraphEmbedder:
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.embedding_dim = embedding_dim
+        self.learning_rate = learning_rate
         
         # Initialize trackers
         self.loss_history = []
@@ -216,3 +217,22 @@ class GraphEmbedder:
         instance.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
         return instance
+
+    def reset_model(self):
+        """Reset the model to its initial state.
+        
+        This method:
+        1. Reinitializes model weights
+        2. Resets the optimizer
+        3. Clears loss history and embeddings
+        """
+        # Reinitialize model with same architecture
+        self.model = self._create_model(self.input_dim, self.hidden_dim, self.embedding_dim)
+        
+        # Reset optimizer
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        
+        # Clear stored results
+        self.loss_history = []
+        self.embeddings = None
+        self.labels = None

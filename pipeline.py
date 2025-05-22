@@ -4,16 +4,33 @@ from skimage import img_as_ubyte
 import seaborn as sns
 import matplotlib as mpl
 from sklearn.cluster import DBSCAN
+from plotting import save_reconstructed_image
 from pathlib import Path
 import matplotlib.pyplot as plt
 from PIL import Image
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Union
 import numba
 import polars as pl
 from scipy.interpolate import Rbf
 from networkx import Graph
-import cupy as cp
 import time
+import platform
+
+# Determine hardware platform and import appropriate acceleration library
+if platform.system() == "Darwin" and platform.processor() == "arm":
+    try:
+        import mlx.core as xp
+        ACCEL_DEVICE = "mlx"
+    except ImportError:
+        import numpy as xp
+        ACCEL_DEVICE = "cpu"
+else:
+    try:
+        import cupy as xp
+        ACCEL_DEVICE = "cuda"
+    except ImportError:
+        import numpy as xp
+        ACCEL_DEVICE = "cpu"
 
 def plot_and_save(data: np.ndarray, target: Path, name: str, ax: plt.Axes, color: bool = False) -> None:
     """Plots the data and saves the full resolution image to the target directory.
@@ -129,136 +146,86 @@ def prune_regions(class_sizes: dict, labels: np.ndarray) -> np.ndarray:
     return pruned_labels
 
 
-def numba_class_stats(data: np.ndarray, device: str = 'cpu', verbose: bool = False) -> pl.DataFrame:
-    """Calculate class statistics using either GPU or CPU implementation.
+def class_stats(data: np.ndarray, verbose: bool = False) -> pl.DataFrame:
+    """Calculate class statistics using hardware-appropriate acceleration.
+    
+    Computes statistics for each class in the input data, including:
+    - Class label
+    - Size (number of pixels)
+    - Median x and y positions
+    - Standard deviation of x and y positions
     
     Args:
-        data: Input image array
-        use_gpu: Whether to attempt GPU processing first
-        benchmark: Whether to return timing information
+        data: Input labeled image array (2D)
+        verbose: Whether to print timing and device information
     
     Returns:
-        DataFrame with class statistics, and optionally timing information
+        DataFrame with columns: class, size, median_x, median_y, std_x, std_y
     """
-    def get_stats_gpu(data: np.ndarray) -> np.ndarray:
-        start_times = {'gpu_transfer_to': time.perf_counter()}
-        
-        # Move data to GPU
-        data_gpu = cp.asarray(data)
-        start_times['gpu_compute'] = time.perf_counter()
-        
-        # Get unique classes (excluding 0)
-        classes = cp.unique(data_gpu)[1:]
+    @numba.njit(parallel=True, fastmath=True)
+    def _cpu_class_stats(data: np.ndarray) -> np.ndarray:
+        """Numba-accelerated CPU implementation of class statistics calculation."""
+        classes = np.unique(data)
+        classes = classes[classes != 0]  # Remove background
         n_classes = len(classes)
+        all_outputs = np.zeros((n_classes, 6), dtype=np.float32)
         
-        # Initialize output array
-        all_outputs = cp.zeros((n_classes, 6), dtype=cp.float32)
-        
-        # Process each class in parallel on GPU
-        for i, c in enumerate(classes):
-            # Get positions where class c exists
-            positions = cp.where(data_gpu == c)
+        for i in numba.prange(n_classes):
+            c = classes[i]
+            positions = np.where(data == c)
             x_pos = positions[0]
             y_pos = positions[1]
             size = len(x_pos)
             
-            # Calculate statistics
-            median_x = cp.median(x_pos)
-            median_y = cp.median(y_pos)
-            std_x = cp.std(x_pos)
-            std_y = cp.std(y_pos)
+            median_x = int(np.median(x_pos))
+            median_y = int(np.median(y_pos))
+            std_x = float(np.std(x_pos))
+            std_y = float(np.std(y_pos))
             
             all_outputs[i] = [c, size, median_x, median_y, std_x, std_y]
         
-        start_times['gpu_transfer_from'] = time.perf_counter()
-        # Move results back to CPU
+        return all_outputs
+
+    timings: Dict[str, float] = {'start': time.perf_counter()}
+    
+    try:
+        import cupy as cp
+        # GPU implementation
+        timings['transfer_start'] = time.perf_counter()
+        data_dev = cp.asarray(data)
+        timings['transfer_end'] = time.perf_counter()
+        
+        classes = cp.unique(data_dev)
+        classes = classes[classes != 0]
+        n_classes = len(classes)
+        all_outputs = cp.zeros((n_classes, 6), dtype=cp.float32)
+        
+        timings['compute_start'] = time.perf_counter()
+        
+        for i, c in enumerate(classes):
+            positions = cp.where(data_dev == c)
+            x_pos = positions[0]
+            y_pos = positions[1]
+            size = len(x_pos)
+            
+            median_x = int(cp.median(x_pos))
+            median_y = int(cp.median(y_pos))
+            std_x = float(cp.std(x_pos))
+            std_y = float(cp.std(y_pos))
+            
+            all_outputs[i] = [float(c), float(size), median_x, median_y, std_x, std_y]
+            
+        timings['compute_end'] = time.perf_counter()
         result = cp.asnumpy(all_outputs)
-        start_times['gpu_end'] = time.perf_counter()
         
-        return result, start_times
-
-    def get_stats_cpu(data: np.ndarray) -> np.ndarray:
-        start_times = {'cpu_start': time.perf_counter()}
-        
-        @numba.njit(fastmath=True, parallel=True)
-        def compute_stats(data):
-            # Pre-compute unique classes excluding 0
-            classes = np.unique(data)[1:]
-            n_classes = len(classes)
-            
-            # Create class index mapping for faster lookup
-            class_to_idx = np.zeros(classes.max() + 1, dtype=np.int32)
-            for i, c in enumerate(classes):
-                class_to_idx[c] = i
-                
-            # First pass: count sizes to pre-allocate arrays
-            sizes = np.zeros(n_classes, dtype=np.int32)
-            for i in numba.prange(data.shape[0]):
-                for j in range(data.shape[1]):
-                    val = data[i, j]
-                    if val != 0:
-                        sizes[class_to_idx[val]] += 1
-            
-            # Pre-allocate position arrays for each class
-            x_positions = [np.zeros(sizes[i], dtype=np.int32) for i in range(n_classes)]
-            y_positions = [np.zeros(sizes[i], dtype=np.int32) for i in range(n_classes)]
-            counters = np.zeros(n_classes, dtype=np.int32)
-            
-            # Second pass: collect positions
-            for i in numba.prange(data.shape[0]):
-                for j in range(data.shape[1]):
-                    val = data[i, j]
-                    if val == 0:
-                        continue
-                    idx = class_to_idx[val]
-                    pos = counters[idx]
-                    x_positions[idx][pos] = i
-                    y_positions[idx][pos] = j
-                    counters[idx] += 1
-            
-            # Calculate statistics
-            all_outputs = np.zeros((n_classes, 6))
-            for i in range(n_classes):
-                x_pos = x_positions[i]
-                y_pos = y_positions[i]
-                
-                # Sort for median calculation
-                x_pos.sort()
-                y_pos.sort()
-                
-                mid = sizes[i] // 2
-                median_x = x_pos[mid] if sizes[i] % 2 == 1 else (x_pos[mid-1] + x_pos[mid]) / 2
-                median_y = y_pos[mid] if sizes[i] % 2 == 1 else (y_pos[mid-1] + y_pos[mid]) / 2
-                
-                # Calculate std
-                std_x = np.std(x_pos)
-                std_y = np.std(y_pos)
-                
-                all_outputs[i] = [classes[i], sizes[i], median_x, median_y, std_x, std_y]
-                
-            return all_outputs
-
-        result = compute_stats(data)
-        start_times['cpu_end'] = time.perf_counter()
-        return result, start_times
-
-    # Choose processing path and handle results
-    timings = {}
-    if device == 'gpu' and cp.cuda.is_available():
-        try:
-            output_np, gpu_times = get_stats_gpu(data)
-            timings.update(gpu_times)
-            timings['method'] = 'gpu'
-        except (cp.cuda.memory.OutOfMemoryError, Exception) as e:
-            print(f"GPU processing failed: {e}. Falling back to CPU...")
-            output_np, cpu_times = get_stats_cpu(data)
-            timings.update(cpu_times)
-            timings['method'] = 'cpu_fallback'
-    else:
-        output_np, cpu_times = get_stats_cpu(data)
-        timings.update(cpu_times)
-        timings['method'] = 'cpu'
-
+    except ImportError:
+        # CPU implementation with Numba
+        timings['compute_start'] = time.perf_counter()
+        result = _cpu_class_stats(data)
+        timings['compute_end'] = time.perf_counter()
+    
+    timings['end'] = time.perf_counter()
+    
     # Create DataFrame
     cols_dtypes = {
         'class': pl.Int32, 
@@ -268,21 +235,93 @@ def numba_class_stats(data: np.ndarray, device: str = 'cpu', verbose: bool = Fal
         'std_x': pl.Float32, 
         'std_y': pl.Float32
     }
-    output = pl.DataFrame(output_np, schema=cols_dtypes)
-
-    # Calculate timing statistics
-    if timings['method'] == 'gpu':
-        timings['transfer_to_time'] = timings['gpu_compute'] - timings['gpu_transfer_to']
-        timings['compute_time'] = timings['gpu_transfer_from'] - timings['gpu_compute']
-        timings['transfer_from_time'] = timings['gpu_end'] - timings['gpu_transfer_from']
-        timings['total_time'] = timings['gpu_end'] - timings['gpu_transfer_to']
-    else:
-        timings['total_time'] = timings['cpu_end'] - timings['cpu_start']
-
+    output = pl.DataFrame(result, schema=cols_dtypes)
+    
     if verbose:
-        print(f"numba_class_stats took {timings['total_time']} seconds")
-        print(pl.DataFrame({'event': timings.keys(), 'time': timings.values()}, strict=False))
+        total_time = timings['end'] - timings['start']
+        print(f"Processing completed on {'GPU' if 'cp' in locals() else 'CPU'}")
+        print(f"Total time: {total_time:.4f} seconds")
+        
+        if 'cp' in locals():
+            transfer_time = timings['transfer_end'] - timings['transfer_start']
+            compute_time = timings['compute_end'] - timings['compute_start']
+            print(f"Transfer time: {transfer_time:.4f} seconds")
+            print(f"Compute time: {compute_time:.4f} seconds")
+        else:
+            compute_time = timings['compute_end'] - timings['compute_start']
+            print(f"Compute time: {compute_time:.4f} seconds")
+    
     return output
+
+
+def extract_windows(x: np.ndarray, y: np.ndarray, window_size: int, stride: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Extract fixed-size windows from a single image and its labels.
+    
+    Args:
+        x: Input image array
+        y: Label image array
+        window_size: Size of the window (height=width)
+        stride: Stride for window extraction
+    
+    Returns:
+        Tuple of (input windows, label windows) as numpy arrays
+    """
+    # Initialize lists to hold the windows
+    windows_x = []
+    windows_y = []
+    
+    # Ensure images are properly shaped
+    if x is None or y is None:
+        raise ValueError("Input image or labels are None")
+        
+    # Handle NaN values
+    x = np.nan_to_num(x, nan=0)
+    y = np.nan_to_num(y, nan=0)
+    
+    # Get dimensions
+    height, width = x.shape
+    
+    # Calculate the number of windows in height and width
+    num_windows_h = (height - window_size) // stride + 1
+    num_windows_w = (width - window_size) // stride + 1
+    
+    # Check if image is too small
+    if num_windows_h <= 0 or num_windows_w <= 0:
+        raise ValueError(f"Image shape {x.shape} too small for window_size {window_size}")
+    
+    # Slide over the image and label to extract windows
+    for i in range(num_windows_h):
+        for j in range(num_windows_w):
+            start_i = i * stride
+            start_j = j * stride
+            
+            # Extract windows
+            window_x = x[start_i:start_i+window_size, start_j:start_j+window_size]
+            window_y = y[start_i:start_i+window_size, start_j:start_j+window_size]
+            
+            # Verify window shapes
+            if (window_x.shape != (window_size, window_size) or 
+                window_y.shape != (window_size, window_size)):
+                continue
+            
+            # Add channel dimension if needed
+            window_x = window_x.reshape(window_size, window_size, 1)
+            window_y = window_y.reshape(window_size, window_size, 1)
+            
+            # Append to the list of windows
+            windows_x.append(window_x)
+            windows_y.append(window_y)
+    
+    if not windows_x:
+        raise ValueError("No valid windows were extracted!")
+    
+    # Convert lists to numpy arrays with explicit shapes
+    output_x = np.stack(windows_x)  # Shape: (N, window_size, window_size, 1)
+    output_y = np.stack(windows_y)  # Shape: (N, window_size, window_size, 1)
+    
+    print(f"Extracted {len(windows_x)} windows with shapes: x={output_x.shape}, y={output_y.shape}")
+    
+    return output_x, output_y
 
 
 @numba.njit(fastmath=True, parallel=True)
@@ -306,6 +345,65 @@ def reassign_classes(org_img: np.ndarray, org_classes: np.ndarray, y_pred: np.nd
         for col_i in numba.prange(n_col):
             output[row_i][col_i] = class_map[org_img[row_i][col_i]]
     return output
+
+
+
+def identify_molecules(sample, vae_img, vae_class_features, vae_regions, target):
+    output_fmt = 'data/stats_df_vae_{sample}.parquet'
+    sample_dir = target/f"sample_{sample}"
+    vae_regions[sample] = find_atoms(binarize(vae_img[sample]))
+
+    cm = mpl.cm.nipy_spectral(np.linspace(0, 1, np.unique(vae_regions[sample]).size))
+    colored_new_labels = np.array([cm[label] for label in vae_regions[sample]])
+    colored_new_labels = (colored_new_labels * 255).astype(np.uint8)  # Convert to uint8
+
+    img = Image.fromarray(colored_new_labels)
+    img.save(sample_dir/"vae_regions.png")
+
+    # Plot the vae segmented image and the regions
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    axes[0].imshow(vae_img[sample], cmap='nipy_spectral')
+    axes[0].set_title('VAE Segmented Image')
+    axes[0].axis('off')
+    axes[1].imshow(vae_regions[sample], cmap='nipy_spectral')
+    axes[1].set_title('VAE Regions')
+    axes[1].axis('off')
+    plt.show()
+
+    output = Path(output_fmt.format(sample=sample))
+    cached = output.exists()
+    print(f"Using cached data for sample {sample}: {cached}")
+    if not cached:
+        class_data = class_stats(vae_regions[sample], verbose=True)
+
+        # Remove the background class
+        bg_class, bg_count = np.unique(vae_regions[sample].flatten(), return_counts=True)
+        bg_class = bg_class[np.argmax(bg_count)]
+
+        org_classes = transfer_classes(
+            class_data.filter(pl.col('class') != bg_class),
+            vae_img[sample], 
+            verbose=True
+        )
+        class_data = class_data.join(org_classes, on='class')
+        class_data.write_parquet(output)
+    else:
+        class_data = pl.read_parquet(output)
+    save_reconstructed_image(
+        vae_regions[sample], 
+        class_data, 
+        sample_dir, 
+        'vae_reconstructed', 
+        verbose=True
+    )
+    vae_class_features[sample] = class_data
+
+    fig, axes = plt.subplots(2, len(class_data.columns)//2, figsize=(18, 9))
+    for i, (col, ax) in enumerate(zip(class_data.columns, axes.flatten())):
+        sns.histplot(class_data[col], ax=ax, kde=True)
+        ax.set_title(col)
+
+
 
 ### GRAPH FUNCTIONS
 
@@ -391,28 +489,17 @@ def interpolate_and_plot(df, x_col, y_col, value_col, ax, grid_size=4000, resolu
     ax.set_axis_off()
 
 
-def transfer_classes(class_data: pl.DataFrame, y_pred: np.ndarray, device: str = 'cpu', verbose: bool = False) -> pl.DataFrame:
+def transfer_classes(class_data: pl.DataFrame, y_pred: np.ndarray, verbose: bool = False) -> pl.DataFrame:
     """Transfer predicted classes to molecules with optional benchmarking.
 
     Args:
         class_data: DataFrame containing molecule data
         y_pred: Predicted classes array
-        device: 'cpu' or 'cuda'
-        benchmark: Whether to return timing information
+        verbose: Whether to print timing information
 
     Returns:
-        DataFrame with transferred classes, and optionally timing information
+        DataFrame with transferred classes
     """
-    @numba.njit(parallel=True, fastmath=True)
-    def _test_assign(molecules_x, molecules_y, y_pred):
-        n = len(molecules_x)
-        result = np.empty(n, dtype=y_pred.dtype)
-        
-        for i in numba.prange(n):
-            result[i] = y_pred[molecules_x[i], molecules_y[i]]
-        
-        return result
-    
     @numba.njit(parallel=True, fastmath=True)
     def _test_assign_chunked(molecules_x, molecules_y, y_pred):
         n = len(molecules_x)
@@ -426,67 +513,38 @@ def transfer_classes(class_data: pl.DataFrame, y_pred: np.ndarray, device: str =
                 result[i] = y_pred[molecules_x[i], molecules_y[i]]
         
         return result
+
+    timings: Dict[str, float] = {'start': time.perf_counter()}
     
-    def _test_assign_cuda(molecules_x, molecules_y, y_pred):
-        timings = {'gpu_transfer_to': time.perf_counter()}
-        
-        # Transfer arrays to GPU
-        molecules_x_gpu = cp.asarray(molecules_x)
-        molecules_y_gpu = cp.asarray(molecules_y) 
-        y_pred_gpu = cp.asarray(y_pred)
-        result_gpu = cp.empty(len(molecules_x), dtype=y_pred.dtype)
-        
-        timings['gpu_compute'] = time.perf_counter()
-        
-        # Create indexing array and perform lookup
-        idx = cp.arange(len(molecules_x))
-        result_gpu = y_pred_gpu[molecules_x_gpu[idx], molecules_y_gpu[idx]]
-        
-        timings['gpu_transfer_from'] = time.perf_counter()
-        
-        # Transfer result back to CPU
-        result = cp.asnumpy(result_gpu)
-        
-        timings['gpu_end'] = time.perf_counter()
-        return result, timings
-
-    # Start timing
-    timings = {'start': time.perf_counter()}
-
     # Make sure we have writable copies of our input arrays
     timings['copy_start'] = time.perf_counter()
-    molecules = class_data['class'].to_numpy().copy()
-    molecules_x = class_data['median_x'].to_numpy().copy()
-    molecules_y = class_data['median_y'].to_numpy().copy()
+    molecules = class_data['class'].to_numpy()
+    molecules_x = class_data['median_x'].to_numpy().astype(np.int32)
+    molecules_y = class_data['median_y'].to_numpy().astype(np.int32)
     y_pred = y_pred.copy()
     timings['copy_end'] = time.perf_counter()
     
-    if device == 'cuda':
-        print("Using CUDA")
-        if cp.cuda.is_available():
-            try:
-                output, gpu_times = _test_assign_cuda(molecules_x, molecules_y, y_pred)
-                timings.update(gpu_times)
-                timings['method'] = 'gpu'
-            except (cp.cuda.memory.OutOfMemoryError, Exception) as e:
-                print(f"GPU processing failed: {e}. Falling back to CPU...")
-                timings['compute_start'] = time.perf_counter()
-                output = _test_assign_chunked(molecules_x, molecules_y, y_pred)
-                timings['compute_end'] = time.perf_counter()
-                timings['method'] = 'cpu_fallback'
-        else:
-            print("CUDA not available, falling back to CPU")
-            timings['compute_start'] = time.perf_counter()
-            output = _test_assign_chunked(molecules_x, molecules_y, y_pred)
-            timings['compute_end'] = time.perf_counter()
-            timings['method'] = 'cpu_fallback'
-    else:
-        print("Using CPU")
+    try:
+        import cupy as cp
+        # GPU implementation
+        timings['transfer_start'] = time.perf_counter()
+        molecules_x_dev = cp.asarray(molecules_x)
+        molecules_y_dev = cp.asarray(molecules_y)
+        y_pred_dev = cp.asarray(y_pred)
+        timings['transfer_end'] = time.perf_counter()
+        
+        timings['compute_start'] = time.perf_counter()
+        idx = cp.arange(len(molecules_x))
+        output_dev = y_pred_dev[molecules_x_dev[idx], molecules_y_dev[idx]]
+        output = cp.asnumpy(output_dev)
+        timings['compute_end'] = time.perf_counter()
+        
+    except ImportError:
+        # CPU implementation with Numba
         timings['compute_start'] = time.perf_counter()
         output = _test_assign_chunked(molecules_x, molecules_y, y_pred)
         timings['compute_end'] = time.perf_counter()
-        timings['method'] = 'cpu'
-
+    
     # DataFrame creation timing
     timings['df_start'] = time.perf_counter()
     result = pl.DataFrame({
@@ -495,19 +553,23 @@ def transfer_classes(class_data: pl.DataFrame, y_pred: np.ndarray, device: str =
     })
     timings['end'] = time.perf_counter()
 
-    # Calculate timing statistics
-    if timings['method'] == 'gpu':
-        timings['transfer_to_time'] = timings['gpu_compute'] - timings['gpu_transfer_to']
-        timings['compute_time'] = timings['gpu_transfer_from'] - timings['gpu_compute']
-        timings['transfer_from_time'] = timings['gpu_end'] - timings['gpu_transfer_from']
-    else:
-        timings['compute_time'] = timings['compute_end'] - timings['compute_start']
-    
-    timings['copy_time'] = timings['copy_end'] - timings['copy_start']
-    timings['df_creation_time'] = timings['end'] - timings['df_start']
-    timings['total_time'] = timings['end'] - timings['start']
-
     if verbose:
-        print(f"transfer_classes took {timings['total_time']} seconds")
-        print(pl.DataFrame({'event': timings.keys(), 'time': timings.values()}, strict=False))
+        total_time = timings['end'] - timings['start']
+        print(f"Processing completed on {'GPU' if 'cp' in locals() else 'CPU'}")
+        print(f"Total time: {total_time:.4f} seconds")
+        
+        if 'cp' in locals():
+            transfer_time = timings['transfer_end'] - timings['transfer_start']
+            compute_time = timings['compute_end'] - timings['compute_start']
+            print(f"Transfer time: {transfer_time:.4f} seconds")
+            print(f"Compute time: {compute_time:.4f} seconds")
+        else:
+            compute_time = timings['compute_end'] - timings['compute_start']
+            print(f"Compute time: {compute_time:.4f} seconds")
+        
+        copy_time = timings['copy_end'] - timings['copy_start']
+        df_time = timings['end'] - timings['df_start']
+        print(f"Copy time: {copy_time:.4f} seconds")
+        print(f"DataFrame creation time: {df_time:.4f} seconds")
+    
     return result

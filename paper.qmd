@@ -26,6 +26,8 @@ format:
         \renewcommand*{\Authand}{, }
         \renewcommand*{\Authands}{, }
         \renewcommand\Affilfont{\small}
+  docx:
+    highlight-style: github
 abstract: |
   Micrography introduces a novel graph-based framework for analyzing electron microscope images of materials, addressing fundamental limitations of traditional pixel-based approaches. While conventional methods like convolutional neural networks and autoencoders treat images as pixel arrays, our approach reconstructs the physical arrangement of molecules as graphs, where nodes represent individual molecules with their spatial and morphological features, and edges capture their nearest-neighbor relationships. This transformation preserves critical structural information that is often lost in pixel-space transformations. By applying graph neural networks to these molecular arrangements, we can detect subtle structural anomalies, characterize material properties, and identify defects with significantly improved interpretability. Our comparative analysis demonstrates that graph-based representations capture material properties that remain hidden to traditional methods, particularly in regions with structural irregularities. The framework lays groundwork for intelligent, guided microscopy that can autonomously direct imaging resources toward regions of scientific interest, fundamentally changing how electron microscopy is utilized in materials science research. We demonstrate this on an open access dataset of Sm-doped BFO STEM images [1].
 
